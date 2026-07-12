@@ -107,6 +107,9 @@ class Crawler(ABC):
     language: ClassVar[str] = "en"
     document_type: ClassVar[DocumentType] = "other"
 
+    # Set to True on dynamically-generated subclasses from discover_and_register
+    _discovered: ClassVar[bool] = False
+
     # ---- Layer 1 — Discovery -------------------------------------------
 
     def discover_pages(self) -> Iterator[tuple[str, str]]:
@@ -164,6 +167,31 @@ class Crawler(ABC):
         )
         return record, []
 
+    # ---- Site-level discovery (optional) -------------------------------
+
+    @classmethod
+    def discover_and_register(cls) -> list[str]:
+        """Optionally discover sub-listings from a site umbrella and register
+        one subclass per listing.
+
+        Called once per unique implementation during module load, after every
+        source file has been auto-imported. Default: no-op — returns `[]`.
+
+        Override in a site-level intermediate base (e.g. `FiSeListingCrawler`)
+        to fetch a site's umbrella URL, extract every sub-listing URL, smoke
+        test each by attempting to parse, and dynamically build + `@register`
+        a subclass per validated listing. Already-covered URLs should be
+        skipped so hand-written crawlers with custom `classify()` take
+        precedence over auto-discovered ones.
+
+        Set `_discovered = True` on every dynamically-created subclass so
+        `describe()` can report whether a crawler was hand-written or found.
+
+        Returns:
+            List of source_ids that this call newly registered.
+        """
+        return []
+
     # ---- Introspection --------------------------------------------------
 
     def describe(self) -> dict[str, Any]:
@@ -180,6 +208,7 @@ class Crawler(ABC):
             "language": self.language,
             "document_type": self.document_type,
             "overridden_hooks": overridden,
+            "registration": "discovered" if self._discovered else "hand",
         }
 
     # ---- Orchestrator — do not override --------------------------------

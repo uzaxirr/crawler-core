@@ -1,6 +1,6 @@
 """Sanctions of financial companies, published by fi.se.
 
-Extraction rules:
+Extraction rules (added on top of the shared fi.se DOM parser):
   * document_type = 'sanction' if URL contains the sanctions section prefix
   * actions       = keyword match against known Swedish sanction verbs
   * entity        = regex match against known headline shapes
@@ -10,20 +10,11 @@ Extraction rules:
 from __future__ import annotations
 
 import re
-from datetime import date
-from typing import ClassVar, Iterator
-from urllib.parse import urljoin
+from typing import ClassVar
 
-from bs4 import BeautifulSoup
-
-from crawler_core.base import Crawler, register
-from crawler_core.models import (
-    DocumentType,
-    FetchResult,
-    Provenance,
-    RawItem,
-    Record,
-)
+from crawler_core.base import register
+from crawler_core.models import DocumentType, Provenance, RawItem, Record
+from crawler_core.sources.fi_se._base import FiSeListingCrawler
 
 
 _ACTION_KEYWORDS: list[tuple[str, str]] = [
@@ -63,65 +54,16 @@ _SANCTIONS_PREFIX = "/sv/publicerat/sanktioner/finansiella-foretag/"
 
 
 @register
-class FiSanctionsCrawler(Crawler):
+class FiSanctionsCrawler(FiSeListingCrawler):
     source_id: ClassVar[str] = "se_fi_sanctions"
     root_url: ClassVar[str] = (
         "https://www.fi.se/sv/publicerat/sanktioner/finansiella-foretag/"
     )
-    language: ClassVar[str] = "sv"
     document_type: ClassVar[DocumentType] = "sanction"
-
-    # Walk up to 5 pages via ?page=N. The orchestrator's zero-new-URLs
-    # termination catches fi.se's known no-op pagination.
-    _max_pages: ClassVar[int] = 5
-
-    def discover_pages(self) -> Iterator[tuple[str, str]]:
-        for page in range(1, self._max_pages + 1):
-            url = self.root_url if page == 1 else f"{self.root_url}?page={page}"
-            yield f"page-{page}", url
-
-    def parse_items(self, fetched: FetchResult) -> list[RawItem]:
-        soup = BeautifulSoup(fetched.content, "lxml")
-        items: list[RawItem] = []
-
-        for div in soup.select("div.list-item.extended-click-area"):
-            title_link = div.select_one("h2 > a")
-            if title_link is None or not title_link.get("href"):
-                continue
-
-            url = urljoin(fetched.url, title_link["href"])
-            title = title_link.get_text(strip=True)
-
-            date_el = div.select_one(".date")
-            published_at = (
-                _parse_iso_date(date_el.get_text(strip=True)) if date_el else None
-            )
-
-            categories = [
-                a.get_text(strip=True)
-                for a in div.select("a.categoryLink")
-                if a.get_text(strip=True)
-            ]
-
-            brief_el = div.select_one("p.introduction")
-            brief = brief_el.get_text(strip=True) if brief_el else None
-
-            items.append(
-                RawItem(
-                    url=url,
-                    title=title,
-                    published_at=published_at,
-                    source_categories=categories,
-                    brief=brief,
-                )
-            )
-
-        return items
 
     def classify(self, item: RawItem) -> tuple[Record, list[str]]:
         warnings: list[str] = []
 
-        # Document type via URL prefix
         if _SANCTIONS_PREFIX in item.url:
             doc_type: DocumentType = "sanction"
             doc_rule = f"url_pattern:{_SANCTIONS_PREFIX}"
@@ -130,7 +72,6 @@ class FiSanctionsCrawler(Crawler):
             doc_rule = "fallback:no_matching_url_pattern"
             warnings.append(f"document_type fell back to 'other' — {doc_rule}")
 
-        # Actions via keyword scan on title + brief
         haystack = f"{item.title} {item.brief or ''}".lower()
         actions: list[str] = []
         action_rules: list[str] = []
@@ -139,7 +80,6 @@ class FiSanctionsCrawler(Crawler):
                 actions.append(action)
                 action_rules.append(f"keyword:{keyword}={action}")
 
-        # Entity via regex on title
         entity: str | None = None
         entity_rule: str | None = None
         for pattern, rule in _ENTITY_PATTERNS:
@@ -166,10 +106,3 @@ class FiSanctionsCrawler(Crawler):
             ),
         )
         return record, warnings
-
-
-def _parse_iso_date(text: str) -> date | None:
-    try:
-        return date.fromisoformat(text)
-    except ValueError:
-        return None

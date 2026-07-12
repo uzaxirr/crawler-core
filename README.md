@@ -33,14 +33,34 @@ uv sync
 ## Use
 
 ```bash
-uv run crawler-core list                       # show every registered crawler
-uv run crawler-core run se_fi_sanctions        # crawl, snapshot to data/
-uv run crawler-core run se_fi_sanctions -v     # + render results table
-uv run crawler-core describe se_fi_sanctions   # structured self-description
-uv run crawler-core list --json                # machine-readable listing
+uv run crawler-core list                                   # show every registered crawler
+uv run crawler-core run se_fi_sanctions                    # crawl one, snapshot to data/
+uv run crawler-core run se_fi_sanctions -v                 # + render results table
+uv run crawler-core run --all                              # crawl every registered source
+uv run crawler-core describe se_fi_sanctions               # structured self-description
+uv run crawler-core list --json                            # machine-readable listing
+uv run crawler-core discover https://www.fi.se/sv/publicerat/   # sub-listing coverage report
 ```
 
 Snapshots land at `data/<source_id>/<UTC-date>.json`.
+
+### Discover — what's on a site vs what we cover
+
+`crawler-core discover <umbrella-url>` fetches the page, extracts every
+same-host sub-path directly beneath it, and cross-checks against every
+registered crawler's `root_url`. Answers "which listings on this site
+already have a crawler, and which don't?" Directly closes the "we have no
+idea what we're missing" gap.
+
+Example against fi.se's publications index:
+
+```bash
+uv run crawler-core discover https://www.fi.se/sv/publicerat/
+```
+
+Output lists every `/sv/publicerat/<section>/` sub-listing, marked
+`covered` (if a registered crawler's root URL falls under it) or
+`uncovered` (add a crawler class to close the gap).
 
 ## Adding a new source
 
@@ -94,18 +114,33 @@ is different, and there's no useful default.
 
 ### Multiple crawlers per site
 
-fi.se has 5 listings. Each is its own class:
+Sites with multiple listings get one file per listing. fi.se has an
+intermediate base class (`FiSeListingCrawler` in `sources/fi_se/_base.py`)
+that owns the shared DOM parsing and `?page=N` pagination, so each concrete
+listing crawler is 3–4 lines of config:
+
+```python
+@register
+class FiDecisionsCrawler(FiSeListingCrawler):
+    source_id     = "se_fi_decisions"
+    root_url      = "https://www.fi.se/sv/publicerat/sarskilda-pm-beslut/"
+    document_type = "decision"
+```
+
+Current fi.se coverage:
 
 ```
 src/crawler_core/sources/fi_se/
-├── sanctions.py    → FiSanctionsCrawler   source_id="se_fi_sanctions"
-├── reports.py      → FiReportsCrawler     source_id="se_fi_reports"
-├── decisions.py    → FiDecisionsCrawler   source_id="se_fi_decisions"
-├── news.py         → FiNewsCrawler        source_id="se_fi_news"
-└── remissvar.py    → FiRemissvarCrawler   source_id="se_fi_remissvar"
+├── _base.py       → FiSeListingCrawler     (shared DOM + pagination — not registered)
+├── sanctions.py   → FiSanctionsCrawler     "se_fi_sanctions"    (+ custom classify)
+├── decisions.py   → FiDecisionsCrawler     "se_fi_decisions"
+├── news.py        → FiNewsCrawler          "se_fi_news"
+└── remissvar.py   → FiRemissvarCrawler     "se_fi_remissvar"
 ```
 
-Each is independent — one breaking doesn't affect the others.
+Each is independent — one breaking doesn't affect the others. Sites with
+totally different DOMs subclass `Crawler` directly instead of the fi.se
+intermediate.
 
 ## Layout
 
@@ -114,10 +149,14 @@ src/crawler_core/
 ├── base.py       Crawler ABC + @register + registry + orchestrator
 ├── models.py     FetchResult, RawItem, Record, Provenance, CrawlResult, ReviewFlag
 ├── http.py       httpx wrapper with browser-like default headers
-├── cli.py        Typer: list, run, describe
+├── cli.py        Typer: list, run, describe, discover
 └── sources/      One file per crawler, auto-imported recursively
     └── fi_se/
-        └── sanctions.py
+        ├── _base.py       Shared fi.se listing base (not registered)
+        ├── sanctions.py
+        ├── decisions.py
+        ├── news.py
+        └── remissvar.py
 ```
 
 ## What this is not (yet)
